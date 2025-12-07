@@ -13,13 +13,14 @@ import numpy as np
 import os
 
 # --- 1. 下载和加载数据 ---
-
+def softmax(x):
+    return np.exp(x) / np.sum(np.exp(x), axis=1, keepdims=True)
 # 定义数据下载和存储的路径
 data_dir = './mnist_data'
 
 # 定义批次大小
 BATCH_SIZE = 128
-epochs = 100
+epochs = 15
 
 # 加载训练集
 train_dataset = torchvision.datasets.MNIST(
@@ -169,7 +170,7 @@ for epoch in range(1, epochs + 1):
         c1_c_b, c1_c_c, c1_c_h, c1_c_w = c1_conv.shape
         c1_x_h += 2 * c1_padding
         c1_x_w += 2 * c1_padding
-        c1_X = np.zeros((c1_x_b, c1_x_c, c1_x_h, c1_x_w))
+        c1_X = np.zeros((c1_x_b, c1_x_c, c1_x_h, c1_x_w), dtype=np.float32)
         c1_X[:,:, c1_padding:-c1_padding, c1_padding:-c1_padding] = c1_x
 
         c1_h_pos = np.arange(0, c1_x_h - c1_c_h + 1, c1_stride)[:,None,None,None]
@@ -183,12 +184,14 @@ for epoch in range(1, epochs + 1):
         c1_z = np.sum(c1_z, axis=2)
         c1_z += c1_b[:,None,None]
         # print(c1_z.shape) (32, 6, 28, 28) -> batch, channel, H, W
+        # print(f'c1_z.dtype = {c1_z.dtype}')
 
         S2_in = relu(c1_z)
         S2_I, S2_J = np.meshgrid(np.arange(S2_p_size), np.arange(S2_p_size), indexing='ij')
         S2_I, S2_J = np.arange(0,S2_size,S2_stride)[:,None,None,None] + S2_I, np.arange(0,S2_size,S2_stride)[:,None,None] + S2_J
         S2_devided = S2_in[:,:,S2_I,S2_J].copy()
         S2_out = S2_in[:,:,S2_I,S2_J].max(axis=(-2,-1))
+        # print(f'S2_out.dtype = {S2_out.dtype}')
 
         c3_x = S2_out
         c3_x_b, c3_x_c, c3_x_h, c3_x_w = c3_x.shape
@@ -196,8 +199,9 @@ for epoch in range(1, epochs + 1):
 
         c3_padded_h = c3_x_h + 2 * c3_padding
         c3_padded_w = c3_x_w + 2 * c3_padding
-        c3_X_padded = np.zeros((c3_x_b, c3_x_c, c3_padded_h, c3_padded_w))
+        c3_X_padded = np.zeros((c3_x_b, c3_x_c, c3_padded_h, c3_padded_w), dtype=np.float32)
         c3_X_padded[:, :, c3_padding : c3_padded_h - c3_padding, c3_padding : c3_padded_w - c3_padding] = c3_x
+        # print(f'c3_X_padded.dtype = {c3_X_padded.dtype}')
         c3_H_out = (c3_padded_h - c3_c_h) // c3_stride + 1
         c3_W_out = (c3_padded_w - c3_c_w) // c3_stride + 1
 
@@ -215,6 +219,7 @@ for epoch in range(1, epochs + 1):
         c3_z = c3_Z_mult.sum(axis=(-2, -1)) # 沿着 F_h, F_w 求和 (输入通道 C_in 仍保留)
         c3_Z_out = np.sum(c3_z, axis=2)
         c3_Z_out += c3_b[:,None,None]
+        # print(f'c3_Z_out.dtype = {c3_Z_out.dtype}')
 
         S4_in = relu(c3_Z_out)
         S4_I, S4_J = np.meshgrid(np.arange(S4_p_size), np.arange(S4_p_size), indexing='ij')
@@ -228,13 +233,15 @@ for epoch in range(1, epochs + 1):
         X3 = relu(z2)
         z3 = X3 @ W3 + b3
         y_hat = softmax(z3)
-        y = np.zeros((batch_size,output_size))
+        y = np.zeros((batch_size,output_size), dtype=np.float32)
+        # print(f'y_hat.dtype{y_hat.dtype}')
         y[np.arange(batch_size),Y_batch] = 1
 
         loss = np.sum(y * (-np.log(y_hat + 1e-8)),axis=-1).mean()
         if batch_index % 20 == 0:
             print(f'epoch: {epoch}, batch_index: {batch_index}, loss: {loss}')
         z3_loss = y_hat - y
+        # print(f'z3_loss.dtype:{z3_loss.dtype}')
         b3_loss = z3_loss.sum(axis=0)
         W3_loss = np.matmul(X3.T,z3_loss)
         X3_loss = np.matmul(z3_loss,W3.T)
@@ -273,12 +280,14 @@ for epoch in range(1, epochs + 1):
 
         c3_b_grad = c3_l.sum(axis=(-2,-1)).sum(axis=0)
 
+        # print(f'c3_b_grad.dtype:{c3_b_grad.dtype}')
+
         # 计算需要的填充量
         c3_pad_up = c3_c_h - 1 - c3_padding
         c3_pad_left = c3_c_w - 1 - c3_padding
         c3_l_pad = np.zeros((c3_z_b, c3_z_c,
                              c3_x_h + c3_c_h - 2 * c3_padding - 1,
-                             c3_x_w + c3_c_w - 2 * c3_padding - 1))
+                             c3_x_w + c3_c_w - 2 * c3_padding - 1), dtype=np.float32)
 
         # 创建 L 放置到 L_pad 的索引
         c3_l_pad_I, c3_l_pad_J = np.meshgrid(
@@ -288,6 +297,7 @@ for epoch in range(1, epochs + 1):
         )
 
         c3_l_pad[:, :, c3_l_pad_I, c3_l_pad_J] = c3_l
+        # print(f'c3_l_pad.dtype:{c3_l_pad.dtype}')
 
         c3_l_pad_conv_I, c3_l_pad_conv_J = np.meshgrid(np.arange(c3_c_h), np.arange(c3_c_w), indexing='ij')
         c3_l_pad_H_index = np.arange(c3_x_h - 2 * c3_padding)[:, None, None, None] + c3_l_pad_conv_I
@@ -303,15 +313,16 @@ for epoch in range(1, epochs + 1):
         c3_X_grad = c3_X_grad_mult.sum(axis=(-2,-1)).sum(axis=1)
 
         # print(c3_X_grad[0,0,0,:5])
-
+        # print(f'c3_X_grad.dtype:{c3_X_grad.dtype}')
         S2_max_pos = S2_devided.reshape(batch_size,S2_c,S2_size//S2_stride,S2_size//S2_stride,-1).argmax(axis=-1)
+        # print(f'S2_devided.dtype:{S2_devided.dtype}')
         S2_max_b, S2_max_c, S2_max_I, S2_max_J = np.meshgrid(np.arange(batch_size),np.arange(S2_c), np.arange(0,S2_size,S2_stride),
                                          np.arange(0,S2_size,S2_stride),indexing='ij')
         S2_max_I, S2_max_J = S2_max_pos // 2 + S2_max_I, S2_max_pos % 2 + S2_max_J
         S2_in_grad = np.zeros_like(S2_in)
         S2_in_grad[S2_max_b,S2_max_c,S2_max_I,S2_max_J] = c3_X_grad
         # print(S2_in_grad[0,0,0,:10])
-
+        # print(f'S2_in_grad.dtype:{S2_in_grad.dtype}')
         c1_z_b, c1_z_c, c1_z_h, c1_z_w = c1_z.shape
         # --- 反向传播  ---
         c1_l = S2_in_grad * (c1_z > 0).astype(np.float32())
@@ -328,10 +339,9 @@ for epoch in range(1, epochs + 1):
 
         c1_conv_grad = (c1_X[:,np.newaxis,:,c1_idx_x_I, c1_idx_x_J] * c1_l[:, :, np.newaxis,np.newaxis, np.newaxis,:, :]).sum(axis=(-2,-1)).sum(axis=0)
         # print(c1_conv_grad.shape)
-
+        # print(f'c1_conv_grad.dtype:{c1_conv_grad.dtype}')
         c1_b_grad = c1_l.sum(axis=(-2,-1)).sum(axis=0)
         # print(f'c1_b_grad.shape:{c1_b_grad.shape}')
-
         # c1_pad_up = c1_c_h - 1 - c1_padding
         # c1_pad_left = c1_c_w - 1 - c1_padding
         # c1_l_pad = np.zeros((c1_z_b, c1_z_c, c1_x_h + c1_c_h - 2 * c1_padding - 1, c1_x_w + c1_c_w - 2 * c1_padding - 1))
@@ -378,6 +388,19 @@ for epoch in range(1, epochs + 1):
         b2 -= b2_loss * lr
         W3 -= W3_loss * lr
         b3 -= b3_loss * lr
+    params_dict = {
+        "c1_conv": c1_conv,
+        "c1_b": c1_b,
+        "c3_conv": c3_conv,
+        "c3_b": c3_b,
+        "W1": W1,
+        "b1": b1,
+        "W2": W2,
+        "b2": b2,
+        "W3": W3,
+        "b3": b3
+    }
+    np.savez(f'model_params_relu_epoch_{epoch}.npz', **params_dict)
 
 # import torch
 # import numpy as np
